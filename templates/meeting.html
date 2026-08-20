@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}LionScribe - Live: {{ meeting.title }}{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto space-y-6">
+
+    <!-- Meeting Header Card -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+            <div class="flex items-center gap-2 mb-1">
+                <span id="meeting-badge" class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-950 text-amber-400 border border-amber-800 flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-amber-400"></span> Ready to Start
+                </span>
+                <span class="text-xs text-slate-500">&bull; Session: {{ meeting.session_id[:8] }}</span>
+            </div>
+            <h1 class="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">{{ meeting.title }}</h1>
+            {% if meeting.description %}
+                <p class="text-slate-400 text-sm mt-1">{{ meeting.description }}</p>
+            {% endif %}
+        </div>
+
+        <!-- Timer & Audio Status -->
+        <div class="flex items-center gap-4 bg-slate-950 px-5 py-3 rounded-xl border border-slate-800 self-start md:self-auto">
+            <div class="flex flex-col">
+                <span class="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Duration</span>
+                <span id="timer-display" class="font-mono text-2xl font-black text-white">00:00:00</span>
+            </div>
+            <div class="h-8 w-px bg-slate-800"></div>
+            <div class="flex flex-col">
+                <span class="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Audio Input</span>
+                <span id="mic-status-label" class="text-xs font-semibold text-slate-400 flex items-center gap-1.5 mt-1">
+                    <i class="fa-solid fa-microphone-slash text-slate-500"></i> Standby
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Live Interaction Panel -->
+    <div class="grid grid-cols-1 gap-6">
+
+        <!-- Controls Bar / Big Start Button Area -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center space-y-6 shadow-xl relative overflow-hidden">
+            <!-- Background pulse wave when recording -->
+            <div id="recording-glow" class="hidden absolute inset-0 bg-emerald-500/5 pointer-events-none animate-pulse-slow"></div>
+
+            <!-- Start State: Big Start Button -->
+            <div id="start-panel" class="space-y-4">
+                <button id="btn-start"
+                        class="w-48 h-48 sm:w-56 sm:h-56 mx-auto rounded-full bg-gradient-to-tr from-emerald-600 via-emerald-500 to-teal-400 hover:from-emerald-500 hover:to-teal-300 text-white font-extrabold text-lg sm:text-xl shadow-2xl shadow-emerald-600/40 hover:shadow-emerald-500/60 hover:scale-105 active:scale-95 transition-all flex flex-col items-center justify-center gap-3 border-4 border-emerald-400/30 group">
+                    <div class="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <i class="fa-solid fa-microphone text-3xl text-white"></i>
+                    </div>
+                    <span>START MEETING</span>
+                    <span class="text-xs font-normal opacity-90 text-emerald-100">Click to listen & transcribe</span>
+                </button>
+                <p class="text-sm text-slate-400">
+                    Microphone access will be requested. Audio chunks will stream directly to <strong class="text-emerald-400">OpenAI Whisper (Base)</strong>.
+                </p>
+            </div>
+
+            <!-- Active Recording State: Stop / End Meeting Controls -->
+            <div id="active-panel" class="hidden space-y-6">
+                <!-- Audio Wave Visualizer Animation -->
+                <div class="flex items-center justify-center gap-1.5 h-16 py-2">
+                    <div class="w-1.5 bg-emerald-500 rounded-full animate-pulse h-6"></div>
+                    <div class="w-1.5 bg-teal-400 rounded-full animate-pulse h-12 delay-75"></div>
+                    <div class="w-1.5 bg-emerald-400 rounded-full animate-pulse h-16 delay-150"></div>
+                    <div class="w-1.5 bg-teal-500 rounded-full animate-pulse h-8 delay-100"></div>
+                    <div class="w-1.5 bg-emerald-500 rounded-full animate-pulse h-14 delay-200"></div>
+                    <div class="w-1.5 bg-teal-400 rounded-full animate-pulse h-10 delay-300"></div>
+                    <div class="w-1.5 bg-emerald-400 rounded-full animate-pulse h-16 delay-75"></div>
+                    <div class="w-1.5 bg-teal-500 rounded-full animate-pulse h-8 delay-150"></div>
+                </div>
+
+                <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+                    <button id="btn-end-meeting"
+                            class="px-8 py-4 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white font-bold text-base rounded-2xl shadow-xl shadow-rose-600/30 hover:shadow-rose-600/50 hover:scale-105 active:scale-95 transition-all flex items-center gap-3">
+                        <i class="fa-solid fa-circle-stop text-xl"></i>
+                        <span>END MEETING & GENERATE SUMMARY</span>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-400">
+                    Ending the meeting saves <span class="text-slate-200">.mp3 audio</span>, exports <span class="text-slate-200">.txt transcript</span>, and prompts <strong class="text-teal-400">Llama 3</strong> to compile notes & a <strong class="text-rose-400">PDF summary</strong>.
+                </p>
+            </div>
+        </div>
+
+        <!-- Live Transcription Window -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-8 h-8 rounded-lg bg-emerald-950 border border-emerald-800 text-emerald-400 flex items-center justify-center text-sm font-bold">
+                        <i class="fa-solid fa-align-left"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-bold text-white">Live Transcription Stream</h2>
+                        <p class="text-xs text-slate-400">Real-time speech converted by OpenAI Whisper</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <span id="transcription-status" class="text-xs text-slate-400 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-slate-600"></span> Idle
+                    </span>
+                    <button id="btn-copy-transcript" class="text-xs px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-colors flex items-center gap-1.5">
+                        <i class="fa-regular fa-copy"></i> Copy
+                    </button>
+                </div>
+            </div>
+
+            <!-- Transcript Container -->
+            <div id="transcript-box"
+                 class="min-h-[260px] max-h-[480px] overflow-y-auto bg-slate-950 p-6 rounded-xl border border-slate-800/80 font-mono text-sm leading-relaxed space-y-3 select-text">
+                <p id="transcript-placeholder" class="text-slate-600 italic text-center py-16">
+                    Click the big "START MEETING" button above to begin live listening and transcription...
+                </p>
+                <div id="transcript-stream" class="space-y-2"></div>
+                <div id="interim-stream" class="text-emerald-400/70 italic text-xs"></div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- Processing & Summary Modal (Shown on End Meeting) -->
+<div id="processing-modal" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl">
+        <div class="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-2xl text-white shadow-lg shadow-emerald-500/30 animate-spin">
+            <i class="fa-solid fa-gear"></i>
+        </div>
+
+        <div class="space-y-2">
+            <h3 class="text-2xl font-bold text-white">Finalizing Meeting</h3>
+            <p id="processing-status-text" class="text-sm text-slate-400">Processing audio and transcription...</p>
+        </div>
+
+        <!-- Step indicators -->
+        <div class="space-y-3 text-left bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs">
+            <div id="step-audio" class="flex items-center gap-2.5 text-slate-400">
+                <i class="fa-solid fa-circle-notch animate-spin text-emerald-400"></i>
+                <span>1. Encoding MP3 audio file...</span>
+            </div>
+            <div id="step-txt" class="flex items-center gap-2.5 text-slate-500">
+                <i class="fa-regular fa-circle"></i>
+                <span>2. Saving full .txt transcript file...</span>
+            </div>
+            <div id="step-llama" class="flex items-center gap-2.5 text-slate-500">
+                <i class="fa-regular fa-circle"></i>
+                <span>3. Generating notes summary with Llama 3...</span>
+            </div>
+            <div id="step-pdf" class="flex items-center gap-2.5 text-slate-500">
+                <i class="fa-regular fa-circle"></i>
+                <span>4. Building summary PDF report...</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.MEETING_CONFIG = {
+        sessionId: "{{ meeting.session_id }}",
+        apiUrlStart: "{{ url_for('api_start_meeting', session_id=meeting.session_id) }}",
+        apiUrlChunk: "{{ url_for('api_transcribe_chunk', session_id=meeting.session_id) }}",
+        apiUrlEnd: "{{ url_for('api_end_meeting', session_id=meeting.session_id) }}"
+    };
+</script>
+<script src="{{ url_for('static', filename='js/meeting.js') }}"></script>
+{% endblock %}

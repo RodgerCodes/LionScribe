@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-900 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}LionScribe - Live Audio Transcription & AI Meeting Notes{% endblock %}</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#ecfdf5',
+                            100: '#d1fae5',
+                            500: '#10b981',
+                            600: '#059669',
+                            700: '#047857',
+                            800: '#065f46',
+                            900: '#064e3b',
+                        }
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'ping-slow': 'ping 2s cubic-bezier(0, 0, 0.2, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="flex flex-col min-h-full font-sans antialiased bg-slate-950 text-slate-100 selection:bg-emerald-500 selection:text-white">
+    <!-- Top Navigation Bar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <!-- Brand -->
+                <div class="flex items-center gap-3">
+                    <a href="{{ url_for('index') }}" class="flex items-center gap-3 text-xl font-bold tracking-tight hover:opacity-90 transition-opacity">
+                        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center shadow-lg shadow-emerald-500/20 text-white font-extrabold text-xl">
+                            🦁
+                        </div>
+                        <div class="flex flex-col">
+                            <span class="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent font-extrabold text-lg">LionScribe</span>
+                            <span class="text-[10px] uppercase font-semibold tracking-wider text-slate-400 -mt-1">Whisper &bull; Llama 3 Notes</span>
+                        </div>
+                    </a>
+                </div>
+
+                <!-- Navigation Links -->
+                <div class="flex items-center gap-2 sm:gap-4">
+                    <a href="{{ url_for('index') }}" 
+                       class="flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all {% if request.endpoint == 'index' %}text-emerald-400 bg-emerald-950/60 border border-emerald-800/60{% else %}text-slate-300 hover:text-white hover:bg-slate-800/80{% endif %}">
+                        <i class="fa-solid fa-plus-circle text-xs"></i>
+                        <span>New Meeting</span>
+                    </a>
+                    <a href="{{ url_for('index') }}#meetings-list" 
+                       class="flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium text-slate-300 hover:text-white hover:bg-slate-800/80 transition-all">
+                        <i class="fa-solid fa-clock-rotate-left text-xs"></i>
+                        <span>Meeting History</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Flash Alerts -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 w-full">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="space-y-2 mb-4">
+                    {% for category, message in messages %}
+                        <div class="p-4 rounded-xl text-sm flex items-center justify-between border backdrop-blur shadow-lg {% if category == 'error' %}bg-rose-950/70 border-rose-800/80 text-rose-200{% elif category == 'success' %}bg-emerald-950/70 border-emerald-800/80 text-emerald-200{% else %}bg-slate-900 border-slate-700 text-slate-200{% endif %}">
+                            <div class="flex items-center gap-3">
+                                {% if category == 'error' %}
+                                    <i class="fa-solid fa-circle-exclamation text-rose-400"></i>
+                                {% elif category == 'success' %}
+                                    <i class="fa-solid fa-circle-check text-emerald-400"></i>
+                                {% else %}
+                                    <i class="fa-solid fa-circle-info text-sky-400"></i>
+                                {% endif %}
+                                <span>{{ message }}</span>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    <!-- Main Body -->
+    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-800/80 bg-slate-950 py-6 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
+            <div class="flex items-center gap-2">
+                <span>🦁 LionScribe &bull; Live Audio Transcription & Summary</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <span class="flex items-center gap-1.5"><i class="fa-solid fa-microphone-lines text-emerald-500"></i> OpenAI Whisper (Base)</span>
+                <span>&bull;</span>
+                <span class="flex items-center gap-1.5"><i class="fa-solid fa-brain text-teal-400"></i> Llama 3 Notes</span>
+                <span>&bull;</span>
+                <span class="flex items-center gap-1.5"><i class="fa-solid fa-file-pdf text-rose-400"></i> PDF Generator</span>
+            </div>
+        </div>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>
