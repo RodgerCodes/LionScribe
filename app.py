@@ -381,29 +381,17 @@ if __name__ == '__main__':
             return "127.0.0.1"
 
     local_ip = get_local_ip()
-    cert_file = Config.INSTANCE_DIR / 'certs' / 'cert.pem'
-    key_file = Config.INSTANCE_DIR / 'certs' / 'key.pem'
-
-    use_ssl = (os.environ.get('USE_SSL', '1') == '1') and cert_file.exists() and key_file.exists()
-    ssl_context = (str(cert_file), str(key_file)) if use_ssl else None
-    scheme = "https" if ssl_context else "http"
 
     print("\n" + "=" * 60)
-    print(" 🦁 LionScribe Live Server Running")
+    print(" 🦁 LionScribe Live Server Running (HTTP Mode)")
     print("=" * 60)
-    print(f" 👉 Local PC:   {scheme}://localhost:5000")
-    print(f" 👉 Tablet/LAN: {scheme}://{local_ip}:5000")
-    if ssl_context:
-        print(" 🔒 HTTPS Active: Enables microphone access on tablet browsers.")
-        print("    (If your tablet shows a certificate warning, tap 'Advanced' -> 'Proceed').")
-    else:
-        print(" ℹ️ HTTP Mode: For tablet mic access, consider enabling HTTPS certs.")
+    print(f" 👉 Local PC:   http://localhost:5000")
+    print(f" 👉 Tablet/LAN: http://{local_ip}:5000")
     print("=" * 60 + "\n")
 
     app.run(
         debug=False,
         host='0.0.0.0',
         port=5000,
-        threaded=True,
-        ssl_context=ssl_context
+        threaded=True
     )
