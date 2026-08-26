@@ -29,9 +29,9 @@ class Config:
     for directory in [STORAGE_DIR, AUDIO_DIR, TRANSCRIPT_DIR, SUMMARY_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
 
-    # Whisper Settings (Options: 'distil-large-v3', 'distil-medium.en', 'small.en', 'base.en')
-    # Default is 'distil-large-v3' - high-accuracy Whisper Large-v3 level transcription with INT8 CPU optimization
-    WHISPER_MODEL_NAME = os.environ.get('WHISPER_MODEL', 'distil-large-v3')
+    # Whisper Settings (Options: 'distil-medium.en', 'distil-large-v3', 'small.en', 'base.en')
+    # Default is 'distil-medium.en' - ultra fast (<0.5s) high-accuracy transcription optimized for live meetings
+    WHISPER_MODEL_NAME = os.environ.get('WHISPER_MODEL', 'distil-medium.en')
 
     # Llama 3 Settings (Supports Ollama, Groq, OpenRouter, or OpenAI-compatible endpoint)
     LLAMA_MODEL = os.environ.get('LLAMA_MODEL', 'llama3:8b')

@@ -54,13 +54,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let accumulatedSamples = 0;
     let hasSpokenInCurrentChunk = false;
 
-    // Conversational VAD Settings
+    // Low-Latency Conversational VAD Settings
     const TARGET_SAMPLE_RATE = 16000;
     const SILENCE_THRESHOLD = 0.012;         // RMS energy threshold for active speech
-    const NATURAL_PAUSE_SEC = 0.8;           // 800ms natural conversational pause triggers phrase finalization
-    const MIN_SPEECH_DURATION_SEC = 1.0;     // Minimum speech required before a pause triggers send
-    const MAX_PHRASE_DURATION_SEC = 10.0;    // Maximum continuous speech before yielding a chunk
-    const OVERLAP_DURATION_SEC = 0.5;        // 500ms lookback overlap to prevent clipping words on boundary
+    const NATURAL_PAUSE_SEC = 0.45;          // 450ms natural pause triggers immediate phrase finalization
+    const MIN_SPEECH_DURATION_SEC = 0.6;     // 600ms minimum speech for quick responsive phrases
+    const MAX_PHRASE_DURATION_SEC = 5.0;     // 5s max continuous chunk window for fast streaming
+    const OVERLAP_DURATION_SEC = 0.35;       // 350ms lookback overlap to preserve cross-boundary words
 
     // Timer functions
     function startTimer() {
@@ -150,12 +150,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (isInterim) {
-            interimStream.textContent = text;
+            interimStream.innerHTML = `<div class="p-2.5 bg-emerald-950/40 rounded-xl border border-emerald-800/40 text-emerald-300 text-xs flex items-center gap-2 animate-pulse"><span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>${text}</span></div>`;
             transcriptBox.scrollTop = transcriptBox.scrollHeight;
             return;
         }
 
-        interimStream.textContent = "";
+        interimStream.innerHTML = "";
 
         const cleanText = text.trim();
         // Avoid duplicate consecutive lines or echo
@@ -399,8 +399,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             isRecording = true;
 
-            // Check conversational VAD frequently (every 300ms)
-            chunkInterval = setInterval(() => processAndSendChunk(false), 300);
+            // Check conversational VAD frequently (every 200ms for low latency)
+            chunkInterval = setInterval(() => processAndSendChunk(false), 200);
 
             await fetch(config.apiUrlStart, { method: 'POST' });
 
