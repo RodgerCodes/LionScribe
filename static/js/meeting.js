@@ -327,6 +327,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Start Meeting
     async function startMeeting() {
         try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                const isHttp = window.location.protocol === 'http:';
+                const msg = isHttp
+                    ? "Microphone access is blocked by your tablet browser because the site is on HTTP.\n\nTo enable mic access on Chrome:\n1. Open chrome://flags/#unsafely-treat-insecure-origin-as-secure\n2. Add 'http://192.168.1.166:5000' and Enable.\n3. Relaunch Chrome."
+                    : "Microphone device not found or blocked by browser permissions.";
+                alert(msg);
+                return;
+            }
+
             micStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
