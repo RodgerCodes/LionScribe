@@ -100,7 +100,7 @@ def create_app(config_class=Config):
     def ws_transcribe(ws, session_id):
         """
         High-performance persistent WebSocket for streaming raw audio chunks.
-        Transcribes immediately with faster-whisper (int8) and streams text back.
+        Transcribes immediately with Whisper INT8 and streams text back with conversational context.
         """
         meeting = Meeting.query.filter_by(session_id=session_id).first()
         chunk_counter = 0
@@ -116,8 +116,13 @@ def create_app(config_class=Config):
                     # Save chunk to disk for audio archive
                     AudioService.save_chunk(session_id, chunk_counter, data, ext="wav")
                     
-                    # Transcribe chunk with faster-whisper INT8
-                    text = WhisperService.transcribe_bytes(data, model_name=Config.WHISPER_MODEL_NAME)
+                    # Transcribe chunk with conversational context carryover
+                    prompt_context = meeting.full_transcript if meeting else ""
+                    text = WhisperService.transcribe_bytes(
+                        data, 
+                        model_name=Config.WHISPER_MODEL_NAME,
+                        prompt_context=prompt_context
+                    )
                     if text:
                         if meeting:
                             current_full = meeting.full_transcript or ""
@@ -147,7 +152,7 @@ def create_app(config_class=Config):
     def api_transcribe_chunk(session_id):
         """
         Receives an audio chunk from the browser, converts it,
-        transcribes it with OpenAI Whisper, and stores the segment.
+        transcribes it with Whisper, and stores the segment.
         """
         meeting = Meeting.query.filter_by(session_id=session_id).first_or_404()
         
@@ -175,9 +180,15 @@ def create_app(config_class=Config):
         # 2. Convert to 16kHz mono WAV for Whisper
         wav_path = AudioService.convert_to_wav_for_whisper(raw_chunk_path)
 
-        # 3. Transcribe with OpenAI Whisper
-        whisper_res = WhisperService.transcribe_audio(wav_path, model_name=Config.WHISPER_MODEL_NAME)
-        chunk_text = whisper_res.get('text', '').strip()
+        # 3. Transcribe with Whisper using conversational context
+        prompt_context = meeting.full_transcript if meeting else ""
+        with open(wav_path, 'rb') as f:
+            wav_bytes = f.read()
+        chunk_text = WhisperService.transcribe_bytes(
+            wav_bytes,
+            model_name=Config.WHISPER_MODEL_NAME,
+            prompt_context=prompt_context
+        )
 
         # 4. Save segment if meaningful text transcribed
         if chunk_text:
@@ -208,10 +219,11 @@ def create_app(config_class=Config):
         """
         Finalizes meeting:
         1. Encodes final .mp3 audio file
-        2. Writes full .txt transcript file
-        3. Generates Llama 3 notes summary
-        4. Generates notes summary PDF
-        5. Marks meeting completed in SQLite
+        2. Performs sentence-level full audio transcript alignment
+        3. Writes full .txt transcript file
+        4. Generates Llama 3 notes summary
+        5. Generates notes summary PDF
+        6. Marks meeting completed in SQLite
         """
         meeting = Meeting.query.filter_by(session_id=session_id).first_or_404()
         meeting.status = 'processing'
@@ -251,16 +263,23 @@ def create_app(config_class=Config):
             except Exception:
                 pass
 
-        # 3. Check if a full raw transcript was submitted or fallback to db
-        final_transcript_client = request.form.get('final_transcript', '').strip()
-        if final_transcript_client and len(final_transcript_client) > len(meeting.full_transcript or ""):
-            meeting.full_transcript = final_transcript_client
+        # 3. High-Accuracy Full Continuous Audio Alignment Pass
+        # Transcribes the full recorded MP3 for perfect conversational coherence and sentence timestamps
+        full_aligned_text = ""
+        if mp3_path.exists() and mp3_path.stat().st_size > 4000:
+            try:
+                aligned_res = WhisperService.transcribe_audio_file(mp3_path, model_name=Config.WHISPER_MODEL_NAME)
+                full_aligned_text = aligned_res.get('text', '').strip()
+            except Exception as e:
+                print(f"[app] Full audio alignment notice: {e}")
 
-        # If transcript is still empty, attempt a full transcription of the final MP3
-        if not meeting.full_transcript and mp3_path.exists():
-            whisper_wav = AudioService.convert_to_wav_for_whisper(mp3_path)
-            res = WhisperService.transcribe_audio(whisper_wav, model_name=Config.WHISPER_MODEL_NAME)
-            meeting.full_transcript = res.get('text', '').strip()
+        # If full-pass transcribed successfully, use it; otherwise fallback to client/live transcript
+        if full_aligned_text:
+            meeting.full_transcript = full_aligned_text
+        else:
+            final_transcript_client = request.form.get('final_transcript', '').strip()
+            if final_transcript_client and len(final_transcript_client) > len(meeting.full_transcript or ""):
+                meeting.full_transcript = final_transcript_client
 
         # 4. Save .txt transcript file
         txt_filename = f"{session_id}.txt"
@@ -270,7 +289,8 @@ def create_app(config_class=Config):
             meeting_title=meeting.title,
             created_at_str=created_str,
             transcript_text=meeting.full_transcript or "[No speech detected]",
-            output_txt_path=txt_path
+            output_txt_path=txt_path,
+            model_name=Config.WHISPER_MODEL_NAME
         )
         meeting.transcript_file = txt_filename
 

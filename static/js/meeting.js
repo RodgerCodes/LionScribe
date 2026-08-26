@@ -37,10 +37,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let ws = null;
     let lastVoiceTime = Date.now();
     let accumulatedSamples = 0;
+    let hasSpokenInCurrentChunk = false;
 
+    // Conversational VAD Settings
     const TARGET_SAMPLE_RATE = 16000;
-    const SILENCE_THRESHOLD = 0.015; // RMS energy threshold
-    const MAX_CHUNK_DURATION_SEC = 3.5;
+    const SILENCE_THRESHOLD = 0.012;         // RMS energy threshold for active speech
+    const NATURAL_PAUSE_SEC = 0.8;           // 800ms natural conversational pause triggers phrase finalization
+    const MIN_SPEECH_DURATION_SEC = 1.0;     // Minimum speech required before a pause triggers send
+    const MAX_PHRASE_DURATION_SEC = 10.0;    // Maximum continuous speech before yielding a chunk
+    const OVERLAP_DURATION_SEC = 0.5;        // 500ms lookback overlap to prevent clipping words on boundary
 
     // Timer functions
     function startTimer() {
@@ -131,20 +136,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isInterim) {
             interimStream.textContent = text;
+            transcriptBox.scrollTop = transcriptBox.scrollHeight;
             return;
         }
 
         interimStream.textContent = "";
 
         const cleanText = text.trim();
-        // Avoid duplicate consecutive lines
+        // Avoid duplicate consecutive lines or echo
         if (fullTranscriptText.endsWith(cleanText)) return;
 
         const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const segmentDiv = document.createElement('div');
-        segmentDiv.className = 'p-3.5 bg-slate-900/90 rounded-xl border border-slate-800 text-slate-100 text-sm shadow-sm flex items-start gap-3 transition-all duration-300';
+        segmentDiv.className = 'p-3.5 bg-slate-900/90 rounded-xl border border-slate-800 text-slate-100 text-sm shadow-sm flex items-start gap-3 transition-all duration-300 animate-fadeIn';
         segmentDiv.innerHTML = `
-            <span class="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/60 select-none mt-0.5 font-bold">${timeStr}</span>
+            <span class="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/60 select-none mt-0.5 font-bold shrink-0">${timeStr}</span>
             <span class="flex-grow leading-relaxed">${cleanText}</span>
         `;
         transcriptStream.appendChild(segmentDiv);
@@ -163,7 +169,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ws.binaryType = 'arraybuffer';
 
             ws.onopen = () => {
-                transcriptionStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Live (Distil-Whisper)';
+                transcriptionStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Live (Whisper Large-v3)';
             };
 
             ws.onmessage = (event) => {
@@ -175,30 +181,74 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (e) {}
             };
 
-            ws.onerror = () => {};
-        } catch (err) {}
+            ws.onerror = () => {
+                transcriptionStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-400"></span> Live (HTTP mode)';
+            };
+
+            ws.onclose = () => {
+                if (isRecording) {
+                    setTimeout(initWebSocket, 2000);
+                }
+            };
+        } catch (err) {
+            console.warn('WebSocket init warning:', err);
+        }
     }
 
-    // Smart VAD Chunk Processing: Transcribes full phrases when pauses occur
+    // Human Conversational VAD Chunk Processing
     async function processAndSendChunk(force = false) {
         if (!isRecording || pcmBuffer.length === 0) return;
 
-        const bufferDurationSec = accumulatedSamples / (audioContext ? audioContext.sampleRate : 44100);
-        const timeSinceVoice = (Date.now() - lastVoiceTime) / 1000;
+        const sampleRate = audioContext ? audioContext.sampleRate : 44100;
+        const bufferDurationSec = accumulatedSamples / sampleRate;
+        const timeSinceVoiceSec = (Date.now() - lastVoiceTime) / 1000;
 
-        // Send if:
-        // 1. Force send (end of meeting)
-        // 2. We have speech and a natural pause (> 350ms silence) has occurred
-        // 3. Buffer has reached maximum phrase duration (3.5s)
-        const shouldSend = force || 
-                           (bufferDurationSec >= 1.0 && timeSinceVoice >= 0.35) || 
-                           (bufferDurationSec >= MAX_CHUNK_DURATION_SEC);
+        // Conditions to dispatch conversational speech chunk:
+        // 1. Force flush (end of meeting)
+        // 2. Speaker paused naturally (> 800ms silence) after speaking at least 1 second
+        // 3. Continuous uninterrupted speech reached maximum phrase window (10s)
+        const isNaturalPause = hasSpokenInCurrentChunk && (bufferDurationSec >= MIN_SPEECH_DURATION_SEC) && (timeSinceVoiceSec >= NATURAL_PAUSE_SEC);
+        const isMaxDurationReached = bufferDurationSec >= MAX_PHRASE_DURATION_SEC;
 
+        const shouldSend = force || isNaturalPause || isMaxDurationReached;
         if (!shouldSend) return;
 
+        // If not forced and no speech activity was detected in this buffer, trim buffer to avoid accumulation
+        if (!force && !hasSpokenInCurrentChunk && bufferDurationSec > 3.0) {
+            // Keep last 1s of ambient audio
+            const samplesToKeep = Math.floor(sampleRate * 1.0);
+            let keptLen = 0;
+            const keptBuffers = [];
+            for (let i = pcmBuffer.length - 1; i >= 0; i--) {
+                keptBuffers.unshift(pcmBuffer[i]);
+                keptLen += pcmBuffer[i].length;
+                if (keptLen >= samplesToKeep) break;
+            }
+            pcmBuffer = keptBuffers;
+            accumulatedSamples = keptLen;
+            return;
+        }
+
         const currentPcm = pcmBuffer;
-        pcmBuffer = [];
-        accumulatedSamples = 0;
+        
+        // If continuous speech cutoff reached, preserve 500ms overlap to prevent cutting words in half
+        if (isMaxDurationReached && !force) {
+            const overlapSamples = Math.floor(sampleRate * OVERLAP_DURATION_SEC);
+            let overlapLen = 0;
+            const overlapBuffers = [];
+            for (let i = currentPcm.length - 1; i >= 0; i--) {
+                overlapBuffers.unshift(currentPcm[i]);
+                overlapLen += currentPcm[i].length;
+                if (overlapLen >= overlapSamples) break;
+            }
+            pcmBuffer = overlapBuffers;
+            accumulatedSamples = overlapLen;
+        } else {
+            pcmBuffer = [];
+            accumulatedSamples = 0;
+        }
+        
+        hasSpokenInCurrentChunk = false;
 
         let totalLen = 0;
         for (const b of currentPcm) totalLen += b.length;
@@ -209,9 +259,9 @@ document.addEventListener('DOMContentLoaded', () => {
             offset += b.length;
         }
 
-        const downsampled = downsampleBuffer(merged, audioContext.sampleRate, TARGET_SAMPLE_RATE);
-        if (downsampled.length < TARGET_SAMPLE_RATE * 0.4) {
-            return; // Skip negligible noise
+        const downsampled = downsampleBuffer(merged, sampleRate, TARGET_SAMPLE_RATE);
+        if (downsampled.length < TARGET_SAMPLE_RATE * 0.3) {
+            return; // Skip negligible clicks
         }
 
         const wavArrayBuffer = encodeWAV(downsampled, TARGET_SAMPLE_RATE);
@@ -237,11 +287,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         } catch (err) {
-            console.error('Audio chunk upload:', err);
+            console.error('Audio chunk upload error:', err);
         }
     }
 
-    // Real-Time Browser Speech Recognition (Instant Word-by-Word Rendering)
+    // Real-Time Browser Typing Preview (Interim Display Only)
     function initSpeechRecognition() {
         const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRec) return;
@@ -255,17 +305,10 @@ document.addEventListener('DOMContentLoaded', () => {
             speechRecognition.onresult = (event) => {
                 let interim = '';
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    if (event.results[i].isFinal) {
-                        const finalText = event.results[i][0].transcript.trim();
-                        if (finalText) {
-                            appendTranscriptSegment(finalText, false);
-                        }
-                    } else {
-                        interim += event.results[i][0].transcript;
-                    }
+                    interim += event.results[i][0].transcript;
                 }
-                if (interim) {
-                    appendTranscriptSegment(interim, true);
+                if (interim.trim()) {
+                    appendTranscriptSegment(interim.trim(), true);
                 }
             };
 
@@ -277,7 +320,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             speechRecognition.start();
         } catch (e) {
-            console.warn('SpeechRecognition init:', e);
+            console.warn('SpeechRecognition notice:', e);
         }
     }
 
@@ -304,13 +347,14 @@ document.addEventListener('DOMContentLoaded', () => {
             chunkCounter = 0;
             accumulatedSamples = 0;
             lastVoiceTime = Date.now();
+            hasSpokenInCurrentChunk = false;
 
             processorNode.onaudioprocess = (e) => {
                 if (!isRecording) return;
                 const inputData = e.inputBuffer.getChannelData(0);
                 const clone = new Float32Array(inputData);
                 
-                // Calculate RMS energy for smart VAD
+                // Calculate RMS energy for conversational VAD
                 let sumSquares = 0;
                 for (let i = 0; i < inputData.length; i++) {
                     sumSquares += inputData[i] * inputData[i];
@@ -318,6 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const rms = Math.sqrt(sumSquares / inputData.length);
                 if (rms > SILENCE_THRESHOLD) {
                     lastVoiceTime = Date.now();
+                    hasSpokenInCurrentChunk = true;
                 }
 
                 pcmBuffer.push(clone);
@@ -330,8 +375,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             isRecording = true;
 
-            // Check VAD and dispatch phrases periodically
-            chunkInterval = setInterval(() => processAndSendChunk(false), 500);
+            // Check conversational VAD frequently (every 300ms)
+            chunkInterval = setInterval(() => processAndSendChunk(false), 300);
 
             await fetch(config.apiUrlStart, { method: 'POST' });
 
@@ -344,14 +389,14 @@ document.addEventListener('DOMContentLoaded', () => {
             meetingBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-rose-400"></span> Live Recording';
 
             micStatusLabel.innerHTML = '<i class="fa-solid fa-microphone text-emerald-400 animate-pulse"></i> Live Microphone Active';
-            transcriptionStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Listening with Distil-Whisper...';
+            transcriptionStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Listening with Whisper Large-v3...';
 
             startTimer();
             initSpeechRecognition();
 
         } catch (err) {
             console.error('Failed to start recording:', err);
-            alert('Unable to access microphone. Please check your browser permissions.');
+            alert('Unable to access microphone. Please verify browser permissions.');
         }
     }
 
@@ -378,10 +423,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (micSource) micSource.disconnect();
         if (micStream) micStream.getTracks().forEach(track => track.stop());
 
-        // Process last phrase
+        // Process final conversational phrase
         await processAndSendChunk(true);
 
-        // Build full WAV recording blob
+        // Build continuous complete WAV recording blob
         let totalLen = 0;
         for (const b of allRecordedBuffers) totalLen += b.length;
         const mergedAll = new Float32Array(totalLen);
@@ -414,7 +459,7 @@ document.addEventListener('DOMContentLoaded', () => {
             stepAudio.className = "flex items-center gap-2.5 text-emerald-400 font-medium";
             stepAudio.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>1. Audio finalized (.mp3)</span>';
             stepTxt.className = "flex items-center gap-2.5 text-emerald-400 font-medium";
-            stepTxt.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>2. Full transcript exported (.txt)</span>';
+            stepTxt.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>2. Full transcript aligned (.txt)</span>';
             stepLlama.className = "flex items-center gap-2.5 text-teal-400 font-medium";
             stepLlama.innerHTML = '<i class="fa-solid fa-circle-notch animate-spin text-teal-400"></i><span>3. Prompting Llama 3 for meeting notes...</span>';
         }, 1200);
@@ -484,3 +529,4 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 });
+

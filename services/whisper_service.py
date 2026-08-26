@@ -10,39 +10,50 @@ from typing import Optional, Dict, Any
 import numpy as np
 
 class WhisperService:
-    _faster_model = None
-    _openai_model = None
+    _loaded_models: Dict[str, Any] = {}
     _lock = threading.Lock()
 
     @classmethod
-    def get_model(cls, model_name: str = "distil-small.en"):
+    def get_model(cls, model_name: str = "distil-large-v3"):
         """
-        Loads faster-whisper (distil-small.en / small.en) with INT8 quantization.
-        Distil-Whisper provides high accuracy with 6x faster inference speed on CPU.
+        Loads faster-whisper model (e.g. distil-large-v3, distil-medium.en, small.en)
+        with INT8 quantization on CPU for high accuracy and fast inference.
         """
-        if cls._faster_model is None:
-            with cls._lock:
-                if cls._faster_model is None:
-                    try:
-                        from faster_whisper import WhisperModel
-                        print(f"[WhisperService] Loading faster-whisper ({model_name}, int8 on CPU)...")
-                        cls._faster_model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=8)
-                        print(f"[WhisperService] faster-whisper ({model_name}) loaded successfully.")
-                        return cls._faster_model
-                    except Exception as e:
-                        print(f"[WhisperService] distil-small.en failed ({e}), trying base.en / standard whisper...")
-                        try:
-                            from faster_whisper import WhisperModel
-                            cls._faster_model = WhisperModel('base.en', device="cpu", compute_type="int8", cpu_threads=8)
-                            return cls._faster_model
-                        except Exception:
-                            try:
-                                import whisper
-                                cls._openai_model = whisper.load_model('base')
-                                return cls._openai_model
-                            except Exception as e2:
-                                print(f"[WhisperService] Could not load whisper: {e2}")
-        return cls._faster_model or cls._openai_model
+        if model_name in cls._loaded_models:
+            return cls._loaded_models[model_name]
+
+        with cls._lock:
+            if model_name in cls._loaded_models:
+                return cls._loaded_models[model_name]
+
+            cpu_threads = min(os.cpu_count() or 4, 8)
+            candidates = [model_name, "distil-large-v3", "distil-medium.en", "small.en", "base.en"]
+            # Deduplicate while preserving order
+            seen = set()
+            ordered_candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+
+            for candidate in ordered_candidates:
+                try:
+                    from faster_whisper import WhisperModel
+                    print(f"[WhisperService] Loading faster-whisper model '{candidate}' (INT8 on {cpu_threads} CPU threads)...")
+                    model = WhisperModel(candidate, device="cpu", compute_type="int8", cpu_threads=cpu_threads)
+                    cls._loaded_models[candidate] = model
+                    cls._loaded_models[model_name] = model
+                    print(f"[WhisperService] Successfully loaded faster-whisper model '{candidate}'.")
+                    return model
+                except Exception as e:
+                    print(f"[WhisperService] Could not load candidate '{candidate}': {e}")
+
+            # OpenAI Whisper fallback
+            try:
+                import whisper
+                print("[WhisperService] Falling back to standard openai-whisper (base)...")
+                model = whisper.load_model('base')
+                cls._loaded_models[model_name] = model
+                return model
+            except Exception as e2:
+                print(f"[WhisperService] Critical: could not load any whisper model: {e2}")
+                return None
 
     @classmethod
     def decode_wav_to_numpy(cls, wav_data: bytes) -> Optional[np.ndarray]:
@@ -73,27 +84,36 @@ class WhisperService:
 
                 if len(audio_np) > 0:
                     return audio_np
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WhisperService] Error decoding WAV bytes: {e}")
         return None
 
     @classmethod
-    def transcribe_bytes(cls, audio_bytes: bytes, model_name: str = "distil-small.en") -> str:
+    def transcribe_bytes(cls, audio_bytes: bytes, model_name: str = "distil-large-v3", prompt_context: str = "") -> str:
         """
-        High-accuracy English transcription:
-        1. Checks for GROQ_API_KEY (ultra-fast Whisper-Large-v3-turbo, ~100ms)
-        2. Falls back to local Distil-Whisper INT8 on CPU with Voice Activity Filtering
+        High-accuracy conversational English transcription:
+        1. Checks for GROQ_API_KEY (Whisper-Large-v3-turbo cloud API)
+        2. Uses local faster-whisper model with INT8 quantization, conversational VAD, and context prompt
         """
         # 1. Cloud Groq Whisper (if API key provided)
         groq_key = os.environ.get('GROQ_API_KEY', '').strip()
         if groq_key and len(audio_bytes) > 4000:
             try:
                 boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW'
+                prompt_field = ""
+                if prompt_context and prompt_context.strip():
+                    recent = prompt_context.strip()[-200:]
+                    prompt_field = (
+                        f'--{boundary}\r\n'
+                        f'Content-Disposition: form-data; name="prompt"\r\n\r\n{recent}\r\n'
+                    )
+
                 body = (
                     f'--{boundary}\r\n'
                     f'Content-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3-turbo\r\n'
                     f'--{boundary}\r\n'
                     f'Content-Disposition: form-data; name="language"\r\n\r\nen\r\n'
+                    f'{prompt_field}'
                     f'--{boundary}\r\n'
                     f'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
                     f'Content-Type: audio/wav\r\n\r\n'
@@ -116,14 +136,25 @@ class WhisperService:
             except Exception as e:
                 print(f"[WhisperService] Groq whisper notice: {e}")
 
-        # 2. Local Faster-Whisper (Distil-Small / Base)
+        # 2. Local Faster-Whisper
         audio_np = cls.decode_wav_to_numpy(audio_bytes)
-        if audio_np is None or len(audio_np) < 4000: # Ignore noise under 0.25s
+        if audio_np is None or len(audio_np) < 4800:  # Ignore audio under 0.3s
+            return ""
+
+        # Energy check: Skip pure digital silence / flat background noise
+        rms = np.sqrt(np.mean(audio_np ** 2))
+        if rms < 0.005:
             return ""
 
         model = cls.get_model(model_name)
         if model is None:
             return ""
+
+        # Build context-aware prompt for conversational continuity
+        initial_prompt = "High accuracy English meeting transcription with complete sentences and correct punctuation."
+        if prompt_context and prompt_context.strip():
+            recent_context = prompt_context.strip()[-200:]
+            initial_prompt = f"{initial_prompt} Previous context: {recent_context}"
 
         try:
             if hasattr(model, 'transcribe') and 'WhisperModel' in str(type(model)):
@@ -136,38 +167,121 @@ class WhisperService:
                     without_timestamps=True,
                     vad_filter=True,
                     vad_parameters=dict(
-                        min_silence_duration_ms=300,
-                        speech_pad_ms=100
+                        min_silence_duration_ms=400,
+                        speech_pad_ms=150
                     ),
-                    initial_prompt="High accuracy English meeting transcription with complete sentences and correct punctuation."
+                    initial_prompt=initial_prompt
                 )
-                text = " ".join([seg.text for seg in segments]).strip()
+                text = " ".join([seg.text.strip() for seg in segments if seg.text.strip()]).strip()
                 return text
             else:
                 res = model.transcribe(audio_np, fp16=False, language='en')
                 return res.get('text', '').strip()
         except Exception as e:
-            print(f"[WhisperService] Chunk error: {e}")
+            print(f"[WhisperService] Transcription error: {e}")
             return ""
 
     @classmethod
-    def transcribe_audio(cls, audio_path: Path, model_name: str = "distil-small.en") -> Dict[str, Any]:
+    def transcribe_audio_file(cls, audio_path: Path, model_name: str = "distil-large-v3") -> Dict[str, Any]:
         """
-        Transcribes audio from a file path.
+        Transcribes a complete audio file with conversational sentence-level timestamps.
+        Returns a dict containing:
+        - "text": Clean formatted transcript with timestamps
+        - "raw_text": Un-timestamped text
+        - "segments": List of segment objects with start, end, timestamp, text
         """
+        if not audio_path.exists() or audio_path.stat().st_size == 0:
+            return {"text": "", "raw_text": "", "segments": []}
+
+        # First try Groq if key is available and file < 25MB
+        groq_key = os.environ.get('GROQ_API_KEY', '').strip()
+        if groq_key and audio_path.stat().st_size < 25 * 1024 * 1024:
+            try:
+                with open(audio_path, 'rb') as f:
+                    file_data = f.read()
+                text = cls.transcribe_bytes(file_data, model_name=model_name)
+                if text:
+                    return {
+                        "text": text,
+                        "raw_text": text,
+                        "segments": [{"start": 0, "end": 0, "timestamp": "[00:00]", "text": text}]
+                    }
+            except Exception as e:
+                print(f"[WhisperService] Groq file transcribe error: {e}")
+
+        model = cls.get_model(model_name)
+        if model is None:
+            return {"text": "", "raw_text": "", "segments": []}
+
         try:
-            with open(audio_path, 'rb') as f:
-                data = f.read()
-            text = cls.transcribe_bytes(data, model_name=model_name)
-            return {"text": text, "segments": [], "language": "en"}
+            if hasattr(model, 'transcribe') and 'WhisperModel' in str(type(model)):
+                segments, info = model.transcribe(
+                    str(audio_path),
+                    beam_size=1,
+                    best_of=1,
+                    temperature=0.0,
+                    language='en',
+                    vad_filter=True,
+                    vad_parameters=dict(
+                        min_silence_duration_ms=500,
+                        speech_pad_ms=200
+                    ),
+                    initial_prompt="High accuracy English meeting transcription with complete conversational sentences and correct punctuation."
+                )
+
+                formatted_lines = []
+                raw_lines = []
+                parsed_segments = []
+
+                for seg in segments:
+                    seg_text = seg.text.strip()
+                    if not seg_text:
+                        continue
+
+                    # Format timestamp [MM:SS] or [HH:MM:SS]
+                    total_secs = int(seg.start)
+                    mins, secs = divmod(total_secs, 60)
+                    hrs, mins = divmod(mins, 60)
+                    if hrs > 0:
+                        ts_str = f"[{hrs:02d}:{mins:02d}:{secs:02d}]"
+                    else:
+                        ts_str = f"[{mins:02d}:{secs:02d}]"
+
+                    formatted_lines.append(f"{ts_str} {seg_text}")
+                    raw_lines.append(seg_text)
+                    parsed_segments.append({
+                        "start": round(seg.start, 2),
+                        "end": round(seg.end, 2),
+                        "timestamp": ts_str,
+                        "text": seg_text
+                    })
+
+                full_formatted = "\n\n".join(formatted_lines)
+                raw_text = " ".join(raw_lines)
+                return {
+                    "text": full_formatted,
+                    "raw_text": raw_text,
+                    "segments": parsed_segments
+                }
+            else:
+                res = model.transcribe(str(audio_path), fp16=False, language='en')
+                text = res.get('text', '').strip()
+                return {"text": text, "raw_text": text, "segments": []}
         except Exception as e:
-            print(f"[WhisperService] File transcription error: {e}")
-            return {"text": "", "segments": [], "language": "en"}
+            print(f"[WhisperService] Audio file transcription error: {e}")
+            return {"text": "", "raw_text": "", "segments": []}
 
     @classmethod
-    def save_transcript_file(cls, meeting_title: str, created_at_str: str, transcript_text: str, output_txt_path: Path) -> Path:
+    def transcribe_audio(cls, audio_path: Path, model_name: str = "distil-large-v3") -> Dict[str, Any]:
         """
-        Saves the complete meeting transcription to a clean .txt file.
+        Backward compatibility wrapper.
+        """
+        return cls.transcribe_audio_file(audio_path, model_name=model_name)
+
+    @classmethod
+    def save_transcript_file(cls, meeting_title: str, created_at_str: str, transcript_text: str, output_txt_path: Path, model_name: str = "distil-large-v3") -> Path:
+        """
+        Saves the complete meeting transcription to a clean .txt file with metadata.
         """
         output_txt_path.parent.mkdir(parents=True, exist_ok=True)
         content = (
@@ -176,7 +290,7 @@ class WhisperService:
             f"===========================================================\n"
             f" Title     : {meeting_title}\n"
             f" Date      : {created_at_str}\n"
-            f" Engine    : Distil-Whisper (distil-small.en / INT8)\n"
+            f" Engine    : Faster-Whisper ({model_name} / INT8)\n"
             f"===========================================================\n\n"
             f"--- TRANSCRIPT CONTENT ---\n\n"
             f"{transcript_text.strip()}\n\n"

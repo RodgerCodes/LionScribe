@@ -135,7 +135,7 @@ class PDFService:
                 [Paragraph("Meeting Title:", meta_label_style), Paragraph(meeting_title, meta_val_style),
                  Paragraph("Date & Time:", meta_label_style), Paragraph(created_at_str, meta_val_style)],
                 [Paragraph("Duration:", meta_label_style), Paragraph(duration_str, meta_val_style),
-                 Paragraph("AI Models:", meta_label_style), Paragraph("OpenAI Whisper (Base) + Llama 3 (8B)", meta_val_style)]
+                 Paragraph("AI Models:", meta_label_style), Paragraph("Faster-Whisper (Large-v3) + Llama 3", meta_val_style)]
             ]
 
             meta_table = Table(meta_data, colWidths=[80, 180, 75, 185])
