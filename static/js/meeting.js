@@ -1,4 +1,19 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // MediaDevices Compatibility Polyfill
+    if (navigator.mediaDevices === undefined) {
+        navigator.mediaDevices = {};
+    }
+    if (navigator.mediaDevices.getUserMedia === undefined) {
+        const legacyGetUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+        if (legacyGetUserMedia) {
+            navigator.mediaDevices.getUserMedia = function(constraints) {
+                return new Promise(function(resolve, reject) {
+                    legacyGetUserMedia.call(navigator, constraints, resolve, reject);
+                });
+            };
+        }
+    }
+
     const config = window.MEETING_CONFIG;
     if (!config) return;
 
