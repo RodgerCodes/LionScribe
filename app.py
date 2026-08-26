@@ -367,7 +367,43 @@ def create_app(config_class=Config):
 app = create_app()
 
 if __name__ == '__main__':
-    print(f"\n🌐 LionScribe running in HTTP mode:")
-    print(f"   👉 Local:   http://localhost:5000")
-    print(f"   👉 Network: http://192.168.1.166:5000\n")
-    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
+    import socket
+    
+    # Get local IP address dynamically
+    def get_local_ip():
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    local_ip = get_local_ip()
+    cert_file = Config.INSTANCE_DIR / 'certs' / 'cert.pem'
+    key_file = Config.INSTANCE_DIR / 'certs' / 'key.pem'
+
+    use_ssl = (os.environ.get('USE_SSL', '1') == '1') and cert_file.exists() and key_file.exists()
+    ssl_context = (str(cert_file), str(key_file)) if use_ssl else None
+    scheme = "https" if ssl_context else "http"
+
+    print("\n" + "=" * 60)
+    print(" 🦁 LionScribe Live Server Running")
+    print("=" * 60)
+    print(f" 👉 Local PC:   {scheme}://localhost:5000")
+    print(f" 👉 Tablet/LAN: {scheme}://{local_ip}:5000")
+    if ssl_context:
+        print(" 🔒 HTTPS Active: Enables microphone access on tablet browsers.")
+        print("    (If your tablet shows a certificate warning, tap 'Advanced' -> 'Proceed').")
+    else:
+        print(" ℹ️ HTTP Mode: For tablet mic access, consider enabling HTTPS certs.")
+    print("=" * 60 + "\n")
+
+    app.run(
+        debug=False,
+        host='0.0.0.0',
+        port=5000,
+        threaded=True,
+        ssl_context=ssl_context
+    )
