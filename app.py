@@ -233,7 +233,7 @@ def create_app(config_class=Config):
         single_audio_file = None
         if 'full_audio' in request.files:
             uploaded_audio = request.files['full_audio']
-            tmp_full = Config.STORAGE_DIR / f"tmp_{session_id}.webm"
+            tmp_full = Config.STORAGE_DIR / f"tmp_{session_id}.wav"
             uploaded_audio.save(tmp_full)
             single_audio_file = tmp_full
 
@@ -263,23 +263,20 @@ def create_app(config_class=Config):
             except Exception:
                 pass
 
-        # 3. High-Accuracy Full Continuous Audio Alignment Pass
-        # Transcribes the full recorded MP3 for perfect conversational coherence and sentence timestamps
-        full_aligned_text = ""
-        if mp3_path.exists() and mp3_path.stat().st_size > 4000:
+        # 3. Synchronize Full Transcript
+        # Live recording already collected Whisper transcription in meeting.full_transcript
+        final_transcript_client = request.form.get('final_transcript', '').strip()
+        if final_transcript_client and len(final_transcript_client) > len(meeting.full_transcript or ""):
+            meeting.full_transcript = final_transcript_client
+
+        # Fallback audio transcription: ONLY if transcript is completely empty
+        if not meeting.full_transcript and mp3_path.exists() and mp3_path.stat().st_size > 4000:
             try:
                 aligned_res = WhisperService.transcribe_audio_file(mp3_path, model_name=Config.WHISPER_MODEL_NAME)
-                full_aligned_text = aligned_res.get('text', '').strip()
+                if aligned_res.get('text'):
+                    meeting.full_transcript = aligned_res.get('text', '').strip()
             except Exception as e:
-                print(f"[app] Full audio alignment notice: {e}")
-
-        # If full-pass transcribed successfully, use it; otherwise fallback to client/live transcript
-        if full_aligned_text:
-            meeting.full_transcript = full_aligned_text
-        else:
-            final_transcript_client = request.form.get('final_transcript', '').strip()
-            if final_transcript_client and len(final_transcript_client) > len(meeting.full_transcript or ""):
-                meeting.full_transcript = final_transcript_client
+                print(f"[app] Audio transcription fallback notice: {e}")
 
         # 4. Save .txt transcript file
         txt_filename = f"{session_id}.txt"

@@ -61,6 +61,8 @@ class AudioService:
                 ]
                 subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if output_mp3_path.exists() and output_mp3_path.stat().st_size > 0:
+                    chunk_dir = cls.get_chunk_dir(session_id)
+                    shutil.rmtree(chunk_dir, ignore_errors=True)
                     return True
 
             chunk_dir = cls.get_chunk_dir(session_id)

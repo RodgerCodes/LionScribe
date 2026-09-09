@@ -473,20 +473,15 @@ document.addEventListener('DOMContentLoaded', () => {
             audioContext.close();
         }
 
-        // Animate modal steps
+        // Modal step progression
         const stepAudio = document.getElementById('step-audio');
         const stepTxt = document.getElementById('step-txt');
         const stepLlama = document.getElementById('step-llama');
         const stepPdf = document.getElementById('step-pdf');
 
-        setTimeout(() => {
-            stepAudio.className = "flex items-center gap-2.5 text-emerald-400 font-medium";
-            stepAudio.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>1. Audio finalized (.mp3)</span>';
-            stepTxt.className = "flex items-center gap-2.5 text-emerald-400 font-medium";
-            stepTxt.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>2. Full transcript aligned (.txt)</span>';
-            stepLlama.className = "flex items-center gap-2.5 text-teal-400 font-medium";
-            stepLlama.innerHTML = '<i class="fa-solid fa-circle-notch animate-spin text-teal-400"></i><span>3. Prompting Llama 3 for meeting notes...</span>';
-        }, 1200);
+        processingStatusText.textContent = "Finalizing audio and generating meeting notes...";
+        stepAudio.className = "flex items-center gap-2.5 text-teal-400 font-medium";
+        stepAudio.innerHTML = '<i class="fa-solid fa-circle-notch animate-spin text-teal-400"></i><span>1. Encoding audio recording (.mp3)...</span>';
 
         try {
             const formData = new FormData();
@@ -496,8 +491,6 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('duration_seconds', durationSeconds);
             formData.append('final_transcript', fullTranscriptText);
 
-            processingStatusText.textContent = "Llama 3 is analyzing meeting notes & building PDF summary...";
-
             const response = await fetch(config.apiUrlEnd, {
                 method: 'POST',
                 body: formData
@@ -506,8 +499,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (response.ok) {
                 const result = await response.json();
                 
+                stepAudio.className = "flex items-center gap-2.5 text-emerald-400 font-medium";
+                stepAudio.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>1. Audio finalized (.mp3)</span>';
+
+                stepTxt.className = "flex items-center gap-2.5 text-emerald-400 font-medium";
+                stepTxt.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>2. Full transcript synced (.txt)</span>';
+
                 stepLlama.className = "flex items-center gap-2.5 text-emerald-400 font-medium";
-                stepLlama.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>3. Llama 3 notes created</span>';
+                stepLlama.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>3. Llama 3 notes generated</span>';
                 
                 stepPdf.className = "flex items-center gap-2.5 text-emerald-400 font-medium";
                 stepPdf.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i><span>4. Summary PDF generated!</span>';
@@ -516,7 +515,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (result.redirect_url) {
                         window.location.href = result.redirect_url;
                     }
-                }, 800);
+                }, 600);
             } else {
                 throw new Error('Server returned error during finalization');
             }
